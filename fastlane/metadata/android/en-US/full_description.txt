@@ -1,0 +1,9 @@
+Sonora is a warm, offline music player for the songs already on your phone. It reads your device audio library, plays it through a native player, and stays out of the way: no account, no ads, no tracking, and no network permission at all. Everything stays on your device.
+
+Features:
+- Your whole library, searchable by title, artist or album.
+- Full playback with shuffle and repeat.
+- A now-playing screen with artwork and a draggable progress bar.
+- A mini player above the navigation bar.
+- Smooth, transform-only animations that stay fluid on low-end phones.
+- No third-party dependencies — one small, fast APK.
