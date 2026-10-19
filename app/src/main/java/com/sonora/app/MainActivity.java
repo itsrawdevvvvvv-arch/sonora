@@ -9,13 +9,9 @@ import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Color;
 import android.graphics.Insets;
-import android.media.AudioAttributes;
-import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.provider.MediaStore;
 import android.view.View;
 import android.view.Window;
@@ -32,18 +28,16 @@ import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
-import java.util.Random;
 
 /**
- * Sonora — a warm, tactile local music player for Android.
+ * Sonora — a warm, offline local music player for Android.
  *
  * The whole interface is a single self-contained HTML/CSS/JS document served
  * from the app assets. This activity hosts it and bridges the two things a
  * WebView cannot do by itself: reading the device's audio library through
- * MediaStore, and playing it through a native MediaPlayer queue.
+ * MediaStore, and controlling the playback service that keeps music running in
+ * the background.
  *
  * Nothing is uploaded and there is no network permission — your library stays
  * on your device.
@@ -54,18 +48,7 @@ public class MainActivity extends Activity {
     private static final String BG = "#121212";
 
     private WebView web;
-    private MediaPlayer player;
-    private final Handler handler = new Handler(Looper.getMainLooper());
-
-    private final List<JSONObject> queue = new ArrayList<>();
-    private int index = -1;
-    private boolean prepared = false;
-    private boolean pendingPlay = false;
-    private int repeatMode = 0;      // 0 = off, 1 = all, 2 = one
-    private boolean shuffle = false;
-    private final Random rng = new Random();
     private boolean pendingScan = false;
-    private boolean ticking = false;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -147,11 +130,23 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Bridge(), "SonoraBridge");
         web.loadUrl("file:///android_asset/index.html");
         setContentView(web);
+
+        // Bring up the playback engine and route its state into the page.
+        PlaybackService.setListener(new PlaybackService.Listener() {
+            @Override
+            public void onState(String json) {
+                js("window.__player&&window.__player(" + json + ")");
+            }
+        });
+        try {
+            startService(new Intent(this, PlaybackService.class));
+        } catch (Exception ignored) {
+        }
     }
 
     private void setCssInsets(int topPx, int bottomPx) {
         final float d = getResources().getDisplayMetrics().density;
-        final String js = String.format(Locale.US,
+        final String jsCode = String.format(Locale.US,
                 "document.documentElement.style.setProperty('--sat','%.1fpx');"
                         + "document.documentElement.style.setProperty('--sab','%.1fpx');",
                 topPx / d, bottomPx / d);
@@ -159,7 +154,7 @@ public class MainActivity extends Activity {
             web.post(new Runnable() {
                 @Override
                 public void run() {
-                    web.evaluateJavascript(js, null);
+                    web.evaluateJavascript(jsCode, null);
                 }
             });
         }
@@ -187,12 +182,11 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        stopTicking();
-        releasePlayer();
+        PlaybackService.setListener(null);
         super.onDestroy();
     }
 
-    // ------------------------------------------------------------------ audio
+    // ------------------------------------------------------------------ library
 
     private boolean hasAudioPermission() {
         if (Build.VERSION.SDK_INT >= 33) {
@@ -263,153 +257,13 @@ public class MainActivity extends Activity {
         return s;
     }
 
-    private void releasePlayer() {
-        if (player != null) {
-            try {
-                player.reset();
-                player.release();
-            } catch (Exception ignored) {
+    private void doScanAsync() {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                scanSongs();
             }
-            player = null;
-        }
-        prepared = false;
-    }
-
-    private void playAt(int i) {
-        if (i < 0 || i >= queue.size()) {
-            return;
-        }
-        index = i;
-        JSONObject song = queue.get(i);
-        releasePlayer();
-        prepared = false;
-        pendingPlay = true;
-        try {
-            player = new MediaPlayer();
-            player.setAudioAttributes(new AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build());
-            player.setDataSource(this, Uri.parse(song.optString("uri")));
-            player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
-                @Override
-                public void onPrepared(MediaPlayer mp) {
-                    prepared = true;
-                    if (pendingPlay) {
-                        mp.start();
-                        pendingPlay = false;
-                        startTicking();
-                    }
-                    pushState();
-                }
-            });
-            player.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
-                @Override
-                public void onCompletion(MediaPlayer mp) {
-                    advance(true);
-                }
-            });
-            player.setOnErrorListener(new MediaPlayer.OnErrorListener() {
-                @Override
-                public boolean onError(MediaPlayer mp, int what, int extra) {
-                    prepared = false;
-                    stopTicking();
-                    pushState();
-                    return true;
-                }
-            });
-            player.prepareAsync();
-            pushState();
-        } catch (Exception e) {
-            prepared = false;
-            pushState();
-        }
-    }
-
-    private void advance(boolean forward) {
-        if (queue.isEmpty()) {
-            return;
-        }
-        if (repeatMode == 2) {
-            playAt(index);
-            return;
-        }
-        int next;
-        if (shuffle && queue.size() > 1) {
-            do {
-                next = rng.nextInt(queue.size());
-            } while (next == index);
-        } else {
-            next = forward ? index + 1 : index - 1;
-            if (next >= queue.size()) {
-                if (repeatMode == 1) {
-                    next = 0;
-                } else {
-                    stopTicking();
-                    pushState();
-                    return;
-                }
-            }
-            if (next < 0) {
-                next = queue.size() - 1;
-            }
-        }
-        playAt(next);
-    }
-
-    private void startTicking() {
-        if (ticking) {
-            return;
-        }
-        ticking = true;
-        handler.postDelayed(tick, 300);
-    }
-
-    private void stopTicking() {
-        ticking = false;
-        handler.removeCallbacks(tick);
-    }
-
-    private final Runnable tick = new Runnable() {
-        @Override
-        public void run() {
-            pushState();
-            if (ticking) {
-                handler.postDelayed(this, 300);
-            }
-        }
-    };
-
-    private void pushState() {
-        try {
-            JSONObject o = new JSONObject();
-            String state = "stopped";
-            int pos = 0, dur = 0;
-            if (player != null) {
-                try {
-                    if (player.isPlaying()) {
-                        state = "playing";
-                    } else if (prepared || pendingPlay) {
-                        state = "paused";
-                    }
-                    pos = player.getCurrentPosition();
-                    dur = player.getDuration();
-                } catch (Exception ignored) {
-                }
-            }
-            o.put("state", state);
-            o.put("position", pos);
-            o.put("duration", dur < 0 ? 0 : dur);
-            o.put("index", index);
-            o.put("total", queue.size());
-            o.put("repeat", repeatMode);
-            o.put("shuffle", shuffle);
-            if (index >= 0 && index < queue.size()) {
-                o.put("song", queue.get(index));
-            }
-            js("window.__player&&window.__player(" + o.toString() + ")");
-        } catch (Exception ignored) {
-        }
+        }).start();
     }
 
     // ------------------------------------------------------------------ bridge
@@ -436,105 +290,63 @@ public class MainActivity extends Activity {
                 requestPermissions(new String[]{audioPermissionName()}, REQ_AUDIO);
                 return;
             }
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    scanSongs();
-                }
-            }).start();
+            doScanAsync();
         }
 
-        /** Replaces the queue with [json] (a JSON array of songs) and plays [at]. */
+        // ---- playback (delegated to the foreground service) ----
+
         @JavascriptInterface
         public void setQueue(String json, int at) {
-            try {
-                queue.clear();
-                JSONArray arr = new JSONArray(json);
-                for (int i = 0; i < arr.length(); i++) {
-                    queue.add(arr.getJSONObject(i));
-                }
-            } catch (Exception ignored) {
-            }
-            playAt(at);
-        }
-
-        @JavascriptInterface
-        public void playAt(int i) {
-            MainActivity.this.playAt(i);
+            PlaybackService s = PlaybackService.get();
+            if (s != null) s.setQueue(json, at);
         }
 
         @JavascriptInterface
         public void toggle() {
-            if (player == null) {
-                if (index >= 0) {
-                    playAt(index);
-                }
-                return;
-            }
-            try {
-                if (player.isPlaying()) {
-                    player.pause();
-                    stopTicking();
-                } else if (prepared) {
-                    player.start();
-                    startTicking();
-                } else {
-                    pendingPlay = true;
-                }
-            } catch (Exception ignored) {
-            }
-            pushState();
+            PlaybackService s = PlaybackService.get();
+            if (s != null) s.toggle();
         }
 
         @JavascriptInterface
         public void next() {
-            advance(true);
+            PlaybackService s = PlaybackService.get();
+            if (s != null) s.next();
         }
 
         @JavascriptInterface
         public void prev() {
-            if (player != null) {
-                try {
-                    if (player.getCurrentPosition() > 4000) {
-                        player.seekTo(0);
-                        pushState();
-                        return;
-                    }
-                } catch (Exception ignored) {
-                }
-            }
-            advance(false);
+            PlaybackService s = PlaybackService.get();
+            if (s != null) s.prev();
         }
 
         @JavascriptInterface
         public void seek(int ms) {
-            if (player != null && prepared) {
-                try {
-                    player.seekTo(ms);
-                } catch (Exception ignored) {
-                }
-                pushState();
-            }
+            PlaybackService s = PlaybackService.get();
+            if (s != null) s.seek(ms);
         }
 
         @JavascriptInterface
         public void setRepeat(int mode) {
-            repeatMode = mode;
-            pushState();
+            PlaybackService s = PlaybackService.get();
+            if (s != null) s.setRepeat(mode);
         }
 
         @JavascriptInterface
         public void setShuffle(boolean on) {
-            shuffle = on;
-            pushState();
+            PlaybackService s = PlaybackService.get();
+            if (s != null) s.setShuffle(on);
         }
 
         @JavascriptInterface
         public void stop() {
-            stopTicking();
-            releasePlayer();
-            index = -1;
-            pushState();
+            PlaybackService s = PlaybackService.get();
+            if (s != null) s.stopAll();
+        }
+
+        @JavascriptInterface
+        public void requestState() {
+            PlaybackService s = PlaybackService.get();
+            if (s != null) s.requestState();
         }
 
         // ---- chrome ----
@@ -605,12 +417,7 @@ public class MainActivity extends Activity {
             js("window.__perm&&window.__perm(" + granted + ")");
             if (granted && pendingScan) {
                 pendingScan = false;
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        scanSongs();
-                    }
-                }).start();
+                doScanAsync();
             }
         }
     }

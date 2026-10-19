@@ -38,6 +38,10 @@ The interface is a single self-contained `index.html` (HTML, CSS and vanilla Jav
 - **Your whole library** — every track on the device, listed and searchable by title, artist or album.
 - **Warm, tactile design** — an amber hero, soft rounded tiles, a pill search bar and a sliding bottom nav.
 - **Full playback** — play, pause, seek, next, previous, shuffle and three repeat modes (off / all / one).
+- **Background playback** — music keeps playing when you leave the app, with lock-screen, notification and Bluetooth controls.
+- **Home-screen widget** — a now-playing widget with a play/pause button.
+- **Browse your way** — the home tiles filter the library: Favorites, Albums (grouped), Artists (grouped) and Songs.
+- **Favorites** — long-press any song to save it, or tap the heart on the now-playing screen.
 - **Now-playing screen** — a full-bleed player with artwork, a draggable progress bar and transport controls.
 - **Mini player** — a compact bar above the nav so the current track is always one tap away.
 - **Instant search** — filter the library as you type.

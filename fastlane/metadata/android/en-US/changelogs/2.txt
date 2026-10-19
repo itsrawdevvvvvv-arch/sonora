@@ -1,0 +1,1 @@
+Background playback with lock-screen and notification controls. New now-playing home-screen widget. Home tiles now filter the library (Favorites, Albums, Artists, Songs) and you can long-press to favourite a song.
