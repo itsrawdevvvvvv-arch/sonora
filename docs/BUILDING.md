@@ -17,6 +17,7 @@ sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
 ```bash
 git clone https://github.com/itsrawdevvvvvv-arch/sonora.git
 cd sonora
+chmod +x gradlew   # only needed if your clone lost the executable bit
 
 ./gradlew assembleDebug     # -> app/build/outputs/apk/debug/app-debug.apk
 ./gradlew assembleRelease   # -> app/build/outputs/apk/release/app-release-unsigned.apk

@@ -54,11 +54,15 @@ jobs:
           SONORA_STORE_PASSWORD: ${{ secrets.SONORA_STORE_PASSWORD }}
           SONORA_KEY_ALIAS: ${{ secrets.SONORA_KEY_ALIAS }}
           SONORA_KEY_PASSWORD: ${{ secrets.SONORA_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon assembleRelease
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleRelease
 
       - name: Build unsigned release APK (no signing secrets configured)
         if: env.HAS_KEYSTORE != 'true'
-        run: ./gradlew --no-daemon assembleRelease
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleRelease
 
       - name: Locate APK
         id: apk
